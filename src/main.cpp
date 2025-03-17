@@ -5,8 +5,8 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <time.h>
-#include "DHT.h"
-#include "wifipasswd.h"  // Contém as credenciais do Wi-Fi
+#include <DHT.h>
+#include <wifipasswd.h>  // Contém as credenciais do Wi-Fi
 
 // Pinos do LCD
 #define DHTPIN D4      // Pino do DHT22
