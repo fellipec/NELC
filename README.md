@@ -10,7 +10,7 @@ NELC é um projeto baseado no ESP8266 que exibe a data e hora obtidas de um serv
 
 ## 🛠️ Componentes Utilizados
 - **ESP8266 (Wemos D1)**
-- **Display LCD 16x2** com interface I2C
+- **1602 LCD Keypad Shield**
 - **Sensor DHT22** (temperatura e umidade)
 - **Jumpers** para conexão
 
