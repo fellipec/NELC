@@ -30,7 +30,7 @@ NELC é um projeto baseado no ESP8266 que exibe a data e hora obtidas de um serv
 4. Compile e faça o upload do código para o ESP8266.
 
 ## 📜 Licença
-Este projeto é open-source e está sob a licença [GPL 2.0](LICENSE).
+Este projeto é open-source e está sob a licença [GPL 3.0](LICENSE).
 
 ## 🤝 Contribuições
 Sinta-se à vontade para abrir issues e pull requests para melhorias!
