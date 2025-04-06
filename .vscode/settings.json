@@ -2,7 +2,12 @@
     "cSpell.words": [
         "DHTPIN",
         "DHTTYPE",
+        "ntpnow",
+        "openweathermap",
+        "rtcnow",
+        "SEALEVELPRESSURE",
         "Umid",
+        "wifi",
         "WIFI"
     ]
 }
