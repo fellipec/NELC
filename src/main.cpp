@@ -55,6 +55,7 @@ int numRedes = sizeof(ssids) / sizeof(ssids[0]);  // Number of Wi-Fi networks in
 const char* apiKey = OWM_APIKEY; // Change for your API key
 const char* lon = "-49.2908"; // Change coordinates for your city
 const char* lat = "-25.504";
+const int alt = 935; // Altitude in meters
 #define MAX_REQUEST_SIZE 512
 #define MAX_RESPONSE_SIZE 1024
 #define MAX_JSON_SIZE 768
@@ -77,8 +78,6 @@ const char* daysOfTheWeek[7] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"}
 // General variables
 int day, month, year, hour, minute, second, dayOfWeek;
 unsigned long  lastRTCsync = 0;
-float tmp, hum, pres, alt;
-float lastTemp = -1000, lastHum = -1000;
 bool wifiConnected = false, ntpConnected = false;
 int lastUIScreen = 0;
 unsigned long lastUIMillis = 0;
@@ -97,6 +96,8 @@ int UIMin = -1;
 
 
 // Weather variables
+float tmp, hum, pres, calc_alt, qnh;
+float lastTemp = -1000, lastHum = -1000;
 float current_temp = 0.0;
 float current_feels_like = 0.0;
 float current_temp_min = 0.0;
@@ -212,14 +213,27 @@ void upperFirstLetter(char* str) {
   }
 
 
+float calculateQNH(float pressure, float temperature, float altitude) {
+    const float L = 0.0065;        // Gradiente térmico padrão (°C/m)
+    const float T0 = temperature + 273.15;  // Temperatura absoluta (K)
+    const float g = 9.80665;
+    const float M = 0.0289644;
+    const float R = 8.3144598;
+
+    float exponent = (g * M) / (R * L);
+    float seaLevelPressure = pressure * pow(1 - (L * altitude) / T0, -exponent);
+    return seaLevelPressure;
+}
+
 void readBME() {
     if (millis() - lastBMERead > BME_READ_INTERVAL || lastBMERead == 0) {
         lastBMERead = millis();
         bme.takeForcedMeasurement();
         tmp = bme.readTemperature();
         hum = bme.readHumidity();
-        pres = bme.readPressure() / 100.0F;
-        alt = bme.readAltitude(SEALEVELPRESSURE_HPA);    
+        pres = bme.readPressure() / 100.0F;        
+        qnh = calculateQNH(pres, tmp, alt);
+        calc_alt = bme.readAltitude(current_pressure);    
     }
 }
 
@@ -549,7 +563,7 @@ void printMainScreen(int h, int m, int s, int day, int month, int year, int dayO
     lcd.setCursor(0, 3);
     lcd.printf("U: %.1f%%  ", hum);
     lcd.setCursor(10, 3);
-    lcd.printf("%.1fhPa  ", pres);
+    lcd.printf("%.1fhPa ", qnh);
 }
 
 void printCurrentWeather() {
