@@ -13,6 +13,8 @@
 #include <wifipasswd.h>  // Wi-Fi credentials
 #include <apikeys.h>     // OpenWeatherMap API key
 
+// Uncomment to enable the debug serial print
+// #define SERIALPRINT
 
 // I²C Addresses
 // 0x27 → LCD I2C (PCF8574 Controller)
@@ -57,10 +59,9 @@ const char* lon = "-49.2908"; // Change coordinates for your city
 const char* lat = "-25.504";
 const int alt = 935; // Altitude in meters
 #define MAX_REQUEST_SIZE 512
-#define MAX_RESPONSE_SIZE 1024
-#define MAX_JSON_SIZE 768
+#define MAX_RESPONSE_SIZE 4096
 #define FETCH_INTERVAL 900 // Fetch weather data every 15 minutes
-
+char weatherJson[MAX_RESPONSE_SIZE];
 
 // NTP Configuration
 WiFiUDP ntpUDP;
@@ -91,7 +92,7 @@ bool btnToggle = false;
 bool lastButtonState = false;
 bool btnPressed = false;
 unsigned long lastMillis = 0;
-int UIMax = 1; 
+int UIMax = 9; 
 int UIMin = -1; 
 
 
@@ -109,6 +110,22 @@ char location_name[21]; // 20 chars + '\0'
 long current_sunset = 0;
 long current_sunrise = 0;
 long current_dt = 0;
+#define FORECAST_HOURS 8
+long forecast_dt = 0;
+struct Forecast {
+  long dt;
+  float temp;
+  float feels_like;
+  float temp_min;
+  float temp_max;
+  int pressure;
+  int humidity;
+  float pop;
+  float rain_3h;
+  char description[32];
+};
+
+Forecast forecast[FORECAST_HOURS];
 
 
 
@@ -116,9 +133,11 @@ long current_dt = 0;
 bool tryWIFI() {
     bool connOK = false;
     const char* gizmo[] = {"|", ">", "=", "<"}; //Wi-Fi loading animation
-    for (int i = 0; i < numRedes; i++) {        
+    for (int i = 0; i < numRedes; i++) {
+        #ifdef SERIALPRINT
         Serial.print("Tentando conectar em ");
         Serial.print(ssids[i]);
+        #endif
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Conectando em:");
@@ -133,7 +152,9 @@ bool tryWIFI() {
         // Retry connection up to 10 seconds (10 attempts)
         while (WiFi.status() != WL_CONNECTED && tentativa < 20) {
             delay(250);
+            #ifdef SERIALPRINT            
             Serial.print(".");
+            #endif
             lcd.setCursor(19, 1);
             lcd.print(gizmo[j]);  // Display some progress information
             j = (j + 1) % 4;  // Cycle through the gizmo array
@@ -142,7 +163,9 @@ bool tryWIFI() {
         
         // If connected successfully to Wi-Fi
         if (WiFi.status() == WL_CONNECTED) {
+            #ifdef SERIALPRINT
             Serial.printf("\nConectado em %s\n", ssids[i]);
+            #endif
             lcd.clear();
             lcd.print("Conectado ao ");
             lcd.setCursor(0, 1);
@@ -151,7 +174,9 @@ bool tryWIFI() {
             connOK = true;
             break;  // Exit loop if connection is successful
         } else {
+            #ifdef SERIALPRINT
             Serial.printf("\nFalha ao conectar no Wi-Fi: %s\n", ssids[i]);
+            #endif
         }
     }
     lcd.clear();
@@ -171,10 +196,14 @@ int tryNTPServer() {
         timeClient.setPoolServerName(ntpServers[i]);
         timeClient.begin();
         if (timeClient.update()) {
+            #ifdef SERIALPRINT
             Serial.printf("Conexão com NTP bem-sucedida: %s\n ", ntpServers[i]);
+            #endif
             return i;
         } else {
+            #ifdef SERIALPRINT
             Serial.printf("Erro ao conectar no NTP: %s\n", ntpServers[i]);
+            #endif
         }
     }
     return -1;
@@ -260,15 +289,19 @@ void readRTC() {
 void setRTC() {
     readNTP();
     rtc.adjust(DateTime(year, month, day, hour, minute, second));
+    #ifdef SERIALPRINT
     Serial.printf("RTC set to: %02d:%02d:%02d %02d/%02d/%04d\n", hour, minute, second, day, month, year);
+    #endif
 }
 
 bool isRTCSync() {
     readNTP();
     DateTime ntpnow = DateTime(year, month, day, hour, minute, second);
     DateTime rtcnow = rtc.now();
+    #ifdef SERIALPRINT
     Serial.printf("RTC: %02d:%02d:%02d %02d/%02d/%04d\n", rtcnow.hour(), rtcnow.minute(), rtcnow.second(), rtcnow.day(), rtcnow.month(), rtcnow.year());
     Serial.printf("NTP: %02d:%02d:%02d %02d/%02d/%04d\n", ntpnow.hour(), ntpnow.minute(), ntpnow.second(), ntpnow.day(), ntpnow.month(), ntpnow.year());
+    #endif
     if (rtcnow.year() != ntpnow.year() || rtcnow.month() != ntpnow.month() || rtcnow.day() != ntpnow.day() ||
         rtcnow.hour() != ntpnow.hour() || rtcnow.minute() != ntpnow.minute() || rtcnow.second() != ntpnow.second()) {
         return false;
@@ -296,7 +329,7 @@ bool checkConnections() {
     return wifiConnected && ntpConnected;
 }
 
-void buildOWMRequest(char* request, const char* lat, const char* lon, const char* apiKey) {
+void buildWeatherRequest(char* request, const char* lat, const char* lon, const char* apiKey) {
     snprintf(request, MAX_REQUEST_SIZE, 
              "GET /data/2.5/weather?lat=%s&lon=%s&appid=%s&units=metric&lang=pt_br HTTP/1.1\r\n"
              "Host: api.openweathermap.org\r\n"
@@ -304,54 +337,136 @@ void buildOWMRequest(char* request, const char* lat, const char* lon, const char
              lat, lon, apiKey);
 }
 
+void buildForecastRequest(char* request, const char* lat, const char* lon, const char* apiKey) {
+    snprintf(request, MAX_REQUEST_SIZE, 
+             "GET /data/2.5/forecast?lat=%s&lon=%s&cnt=8&appid=%s&units=metric&lang=pt_br HTTP/1.1\r\n"
+             "Host: api.openweathermap.org\r\n"
+             "Connection: close\r\n\r\n", 
+             lat, lon, apiKey);
+}
 
-void getWeather() {
-    if (rtc.now().unixtime() - current_dt > FETCH_INTERVAL) {
-        if (!client.connect("api.openweathermap.org", 443)) { 
+// char weatherJson[MAX_RESPONSE_SIZE];
+void getWeatherJSON(bool forecast = false) {
+    if (!client.connect("api.openweathermap.org", 443)) { 
+        #ifdef SERIALPRINT
         Serial.println("Falha ao conectar ao servidor.");
+        #endif
         return;
-        }
-        char request[MAX_REQUEST_SIZE];
-        buildOWMRequest(request, lat, lon, apiKey);
-        
-        client.print(request); 
+    }
+    char req[MAX_REQUEST_SIZE];
+    if (forecast) {
+        buildForecastRequest(req, lat, lon, apiKey);
+    } else {
+        buildWeatherRequest(req, lat, lon, apiKey);
+    }    
     
-        unsigned long timeout = millis();
-        while (client.available() == 0) { 
+    #ifdef SERIALPRINT
+    Serial.println("Requisição:");
+    Serial.println(req);
+    #endif
+    client.print(req); 
+
+    unsigned long timeout = millis();
+    while (client.available() == 0) { 
         if (millis() - timeout > 5000) { // 5 seconds timeout
+            #ifdef SERIALPRINT
             Serial.println("Erro: Timeout.");
+            #endif
             client.stop();
             return;
         }
-        }
-    
-        // Payload buffer
-        // User this while loop to avoid the Strings object
-        // to avoid memory fragmentation
-        char weatherJson[MAX_RESPONSE_SIZE]; 
-        unsigned int index = 0;
-
-        while (client.available()) {
-            if (index < sizeof(weatherJson) - 1) {  // Buffer limit check
+    }
+    // Payload buffer
+    // User this while loop to avoid the Strings object
+    // to avoid memory fragmentation
+    unsigned int index = 0;
+    unsigned long lastRead = millis();
+    while (millis() - lastRead < 2000) { // timeout de 2 segundos
+        while (client.available()) {            
+            if (index < MAX_RESPONSE_SIZE - 1) {  // Buffer limit check
                 weatherJson[index++] = (char)client.read();  // Add the next character to the buffer
+                lastRead = millis();  // Update last read time
             } else {
                 break;  // Buffer is full, stop reading
             }
         }
-        weatherJson[index] = '\0';  // Add null terminator to the string
+        yield(); // tenta cooperar com o Wi-Fi
+    }
+    weatherJson[index] = '\0';  // Add null terminator to the string
+    #ifdef SERIALPRINT
+    Serial.println("Resposta do servidor:");
+    Serial.print(weatherJson);
+    Serial.print("\n\n");
+    #endif
 
-        // Find the JSON start position
-        char* jsonStart = strchr(weatherJson, '{');  // First { character
-        if (jsonStart) {
-            // Copy the JSON part to the payload
-            strcpy(weatherJson, jsonStart);
-        } else {
-            Serial.println("Erro: JSON não encontrado na resposta.");
+    // Find the JSON start position
+    char* jsonStart = strchr(weatherJson, '{');  // First { character
+    if (jsonStart) {
+        // Copy the JSON part to the payload
+        strcpy(weatherJson, jsonStart);
+    } else {
+        #ifdef SERIALPRINT
+        Serial.println("Erro: JSON não encontrado na resposta.");
+        #endif
+        return;
+    }
+
+}
+
+
+void getForecast() {
+    if ((rtc.now().unixtime() - forecast_dt > FETCH_INTERVAL*4)) {
+        forecast_dt = rtc.now().unixtime();
+        getWeatherJSON(true);
+        
+        JsonDocument doc;
+
+        DeserializationError error = deserializeJson(doc, weatherJson, MAX_RESPONSE_SIZE);
+        
+        if (error) {
+            #ifdef SERIALPRINT
+            Serial.print(F("deserializeJson() failed: "));
+            Serial.println(error.f_str());
+            #endif
             return;
         }
-    
-        // Print the payload for debugging
-         Serial.println(weatherJson);
+        
+        JsonArray list = doc["list"];
+        
+        for (int i = 0; i < FORECAST_HOURS; i++) {
+          JsonObject entry = list[i];
+          JsonObject main = entry["main"];
+          JsonObject weather0 = entry["weather"][0];
+          JsonObject rain = entry["rain"];
+          
+          forecast[i].dt = entry["dt"];
+          forecast[i].dt += utcOffsetInSeconds;
+          forecast[i].temp = main["temp"];
+          forecast[i].feels_like = main["feels_like"];
+          forecast[i].temp_min = main["temp_min"];
+          forecast[i].temp_max = main["temp_max"];
+          forecast[i].pressure = main["pressure"];
+          forecast[i].humidity = main["humidity"];
+          forecast[i].pop = entry["pop"];
+          forecast[i].rain_3h = rain["3h"] | 0.0;
+        
+          const char* desc = weather0["description"] | "";
+          strncpy(forecast[i].description, desc, sizeof(forecast[i].description));
+          forecast[i].description[sizeof(forecast[i].description) - 1] = '\0';
+          upperFirstLetter(forecast[i].description);
+        }
+        
+
+    }
+
+}
+
+
+void getWeather() {
+    if (rtc.now().unixtime() - current_dt > FETCH_INTERVAL) {
+
+
+        getWeatherJSON(false);
     
         // JSON parsing   
         JsonDocument doc;
@@ -359,12 +474,16 @@ void getWeather() {
         DeserializationError error = deserializeJson(doc, weatherJson, MAX_RESPONSE_SIZE);
 
         if (error) {
-        Serial.print(F("deserializeJson() failed: "));
-        Serial.println(error.f_str());
-        return;
+            #ifdef SERIALPRINT
+            Serial.print(F("deserializeJson() failed: "));
+            Serial.println(error.f_str());
+            #endif
+            return;
         }
         
+        #ifdef SERIALPRINT
         Serial.println("JSON parsed");
+        #endif
         JsonObject weather_0 = doc["weather"][0];
         const char* desc = weather_0["description"] | ""; 
         strncpy(current_weatherDescription, desc, sizeof(current_weatherDescription)); // Copy string to avoid null pointer
@@ -390,7 +509,7 @@ void getWeather() {
         current_sunrise = sys["sunrise"];
 
         
-
+        #ifdef SERIALPRINT
         Serial.printf("Clima: %s\n", current_weatherDescription);
         Serial.printf("Temp: %.1f C\n", current_temp);
         Serial.printf("Min: %.1f C\n", current_temp_min);
@@ -404,6 +523,7 @@ void getWeather() {
         Serial.printf("Pôr do sol: %ld\n", current_sunset);
         Serial.printf("Latitude: %s\n", lat);
         Serial.printf("Longitude: %s\n", lon);
+        #endif
         
 
     }
@@ -482,15 +602,23 @@ void setup() {
         lcd.setCursor(0, 3);
         lcd.print(ntpServers[ntpSrvIndex]);
         if (! rtc.isrunning()) {
+            #ifdef SERIALPRINT
             Serial.println("RTC is NOT running, let's set the time!");
+            #endif
             setRTC();
           } else {
+            #ifdef SERIALPRINT
             Serial.println("RTC is running, comparing to NTP time...");
+            #endif
             if (!isRTCSync()) {
+                #ifdef SERIALPRINT
                 Serial.println("RTC time is different from NTP time, setting RTC...");
+                #endif
                 setRTC();
             } else {
+                #ifdef SERIALPRINT
                 Serial.println("RTC time is synchronized with NTP time.");
+                #endif
             }
           }
         delay(2000);
@@ -514,16 +642,27 @@ void setup() {
     lcd.createChar(6, MB);
     lcd.createChar(7, block);
 
+    // Update 
+    readRTC();
+    readBME();
+    getWeather();
+    getForecast();
+
     lcd.clear();
+    #ifdef SERIALPRINT
     Serial.println("RTC Epoch: " + String(rtc.now().unixtime()));
     Serial.println("NTP Epoch: " + String(timeClient.getEpochTime()));
+    #endif
 
     // writeEEPROM(0, 0x41);
     byte data = readEEPROM(0);
     Serial.printf("EEPROM data: %c\n", data);
 
-
-
+    #ifdef SERIALPRINT
+    Serial.println("Inicialização completa - Debug Serial ligado");
+    #else
+    Serial.println("Inicialização completa - Debug Serial desligado");
+    #endif
 
 }
 
@@ -569,9 +708,9 @@ void printMainScreen(int h, int m, int s, int day, int month, int year, int dayO
 void printCurrentWeather() {
     lcd.setCursor(0, 0);
     if (rtc.now().second() / 4 % 2 == 0) {
-        lcd.printf("%20s", current_weatherDescription);
+        lcd.printf("%-20s", current_weatherDescription);
     } else {
-        lcd.printf("Medido em:  %s", DateTime(current_dt).timestamp(DateTime::TIMESTAMP_TIME).c_str());
+        lcd.printf("Tempo as:  %s", DateTime(current_dt).timestamp(DateTime::TIMESTAMP_TIME).c_str());
     }    
     lcd.setCursor(0, 1);
     lcd.printf("Tem: %.1f", current_temp);
@@ -587,6 +726,54 @@ void printCurrentWeather() {
     lcd.printf("%dhPa", current_pressure);
 
 }
+
+void printForecast(unsigned int index) {
+    if (index >= (sizeof(forecast)/sizeof(forecast[0])) ) {
+        #ifdef SERIALPRINT
+        Serial.printf("Index out of range %d\n", index);
+        #endif
+        return;
+    }
+  
+    Forecast fc = forecast[index];
+    
+    // Converter timestamp para hora
+    time_t t = fc.dt;
+    struct tm* timeinfo = localtime(&t); // precisa de RTC ou NTP funcionando
+    char timeStr[12]; // dd/mm hh:mm
+    strftime(timeStr, sizeof(timeStr), "%d/%m %H:%M", timeinfo);
+  
+    // Linha 0: hora da previsão e início da descrição
+    lcd.setCursor(0, 0);
+    lcd.print("Prev: ");
+    lcd.print(timeStr);
+  
+    // Linha 1: descrição do clima (até 20 chars)
+    lcd.setCursor(0, 1);
+    if (strlen(fc.description) > 20) {
+      for (int i = 0; i < 20; i++) lcd.print(fc.description[i]);
+    } else {
+      lcd.print(fc.description);
+    }
+  
+    // Linha 2: temperatura máxima e mínima
+    lcd.setCursor(0, 2);
+    lcd.print("Max:");
+    lcd.print(fc.temp_max, 1);
+    lcd.print((char)223); // símbolo do grau
+    lcd.print(" Min:");
+    lcd.print(fc.temp_min, 1);
+    lcd.print((char)223);
+  
+    // Linha 3: chuva e probabilidade de chuva
+    lcd.setCursor(0, 3);
+    lcd.print("Chuva:");
+    lcd.print(fc.rain_3h, 1);
+    lcd.print("mm POP:");
+    lcd.print((int)(fc.pop * 100));
+    lcd.print("%");
+  }
+  
 
 void printNetworkStatus() {
     lcd.setCursor(0, 0);
@@ -656,18 +843,19 @@ void loop() {
             lastRTCsync = millis();
             if (checkConnections()) {
                 if (!isRTCSync()) {
+                    #ifdef SERIALPRINT
                     Serial.println("RTC time is different from NTP time, setting RTC...");
+                    #endif
                     setRTC();
                 } else {
+                    #ifdef SERIALPRINT
                     Serial.println("RTC time is synchronized with NTP time.");
+                    #endif
                 }
             }
         }
 
-        // Update 
-        readRTC();
-        readBME();
-        getWeather();
+
 
         if (millis() - lastUIMillis > 60000) {
             lastUIMillis = millis();
@@ -679,17 +867,29 @@ void loop() {
         }
 
         if (counter == 0) {
-            //Serial.printf("Temp: %.1f C, Hum: %.1f%%, Pres: %.1fhPa, Alt: %.1fm NTP: %s\n", tmp, hum, pres, alt, ntpConnected ? "True" : "False");
+            #ifdef SERIALPRINT
+            Serial.printf("Temp: %.1f C, Hum: %.1f%%, Pres: %.1fhPa, Alt: %dm NTP: %s\n", tmp, hum, pres, alt, ntpConnected ? "True" : "False");
+            #endif
             printMainScreen(hour, minute, second, day, month, year, dayOfWeek, tmp, hum, pres, alt);
         }
         else if (counter == 1) {
             printCurrentWeather();
         }
+        else if (counter >= 2 && counter <= 9) {
+            printForecast(counter - 2);
+        }
         else if (counter == -1) {
             printNetworkStatus();
         }
         
+        // Update 
+        readRTC();
+        readBME();
+        getWeather();
+        getForecast();
+
         btnPressed = false; // Reset button state
     }
+    
 }
 
