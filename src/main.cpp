@@ -16,7 +16,7 @@
 #include <mqttconfig.h>  // MQTT configuration
 
 // Uncomment to enable the debug serial print
-#define SERIALPRINT
+// #define SERIALPRINT
 
 // I²C Addresses
 // 0x27 → LCD I2C (PCF8574 Controller)
@@ -607,6 +607,9 @@ long lastMQTTMillis = 0;
 void sendSensorData(float tmp, float hum, float pres) {
     if (millis() - lastMQTTMillis > 30000) {
         lastMQTTMillis = millis();
+        lcd.setCursor(19,3);
+        lcd.write(255); // MQTT Activity icon
+
         // Check if connected to MQTT
         if (!mqtt.connected()) {
             #ifdef SERIALPRINT
@@ -647,6 +650,8 @@ void sendSensorData(float tmp, float hum, float pres) {
         Serial.print("Umidade: "); Serial.println(hum_str);
         Serial.print("Pressão: "); Serial.println(pres_str);
         #endif
+        lcd.setCursor(19,3);
+        lcd.write(32); // Clear MQTT Activity icon
     }
 }
 
@@ -677,6 +682,8 @@ void sendSensorData(float tmp, float hum, float pres) {
 void setup() {
     Wire.begin();
     Serial.begin(115200);
+    Serial.println("");
+    Serial.println("Iniciando...");
     lcd.begin(20, 4);
     lcd.setCursor(0, 0);
     lcd.backlight();
@@ -750,7 +757,9 @@ void setup() {
         delay(10000);
     }
 
+    // Configure the MQTT server
     mqtt.setServer(mqtt_server, mqtt_port);
+    mqtt.setKeepAlive(60);
 
 
     // Makes the Weather update in 10 seconds from startup
