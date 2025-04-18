@@ -10,11 +10,13 @@
 #include <RTClib.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <PubSubClient.h>
 #include <wifipasswd.h>  // Wi-Fi credentials
 #include <apikeys.h>     // OpenWeatherMap API key
+#include <mqttconfig.h>  // MQTT configuration
 
 // Uncomment to enable the debug serial print
-// #define SERIALPRINT
+#define SERIALPRINT
 
 // I²C Addresses
 // 0x27 → LCD I2C (PCF8574 Controller)
@@ -63,10 +65,11 @@ const int alt = 935; // Altitude in meters
 #define FETCH_INTERVAL 900 // Fetch weather data every 15 minutes
 char weatherJson[MAX_RESPONSE_SIZE];
 
-// NTP Configuration
+// Network Configuration
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, ntpServers[ntpSrvIndex], utcOffsetInSeconds, 60000);
 WiFiClientSecure client;
+PubSubClient mqtt(client);
 
 // Dias da semana
 const char* daysOfTheWeek[7] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"};
@@ -133,6 +136,21 @@ Forecast forecast[FORECAST_HOURS];
 bool tryWIFI() {
     bool connOK = false;
     const char* gizmo[] = {"|", ">", "=", "<"}; //Wi-Fi loading animation
+
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(); // Limpa conexões anteriores
+    delay(100);
+    #ifdef SERIALPRINT
+    Serial.println("Escaneando redes...");
+    #endif
+    int n = WiFi.scanNetworks();
+    if (n == 0) {
+      #ifdef SERIALPRINT
+      Serial.println("Nenhuma rede encontrada.");
+      #endif
+      return connOK;
+    }
+
     for (int i = 0; i < numRedes; i++) {
         #ifdef SERIALPRINT
         Serial.print("Tentando conectar em ");
@@ -145,6 +163,19 @@ bool tryWIFI() {
         lcd.print("               ");
         lcd.setCursor(0, 1);
         lcd.print(ssids[i]);
+        bool found = false;
+        for (int j = 0; j < n; j++) {
+            if (WiFi.SSID(j) == ssids[i]) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            #ifdef SERIALPRINT
+            Serial.println(" - Rede não encontrada.");
+            #endif
+            continue;  // Skip to the next SSID if not found
+        }
         WiFi.begin(ssids[i], passwords[i]);
 
         int tentativa = 0;
@@ -209,6 +240,54 @@ int tryNTPServer() {
     return -1;
 }
 
+/*
+*  removeAccents() - Removes accents from a string
+*
+*  This function takes an UTF-8 string as input and removes any accents from the characters.
+*  It is necessary for the correct display of characters on the LCD.
+*/
+void removeAccents(char* str) {
+    char* src = str;
+    char* dst = str;
+  
+    while (*src) {
+      // Se encontrar caractere UTF-8 multibyte (início com 0xC3)
+      if ((uint8_t)*src == 0xC3) {
+        src++;  // Avança para o próximo byte
+        switch ((uint8_t)*src) {
+          case 0xA0: case 0xA1: case 0xA2: case 0xA3: case 0xA4:  *dst = 'a'; break; // àáâãä
+          case 0x80: case 0x81: case 0x82: case 0x83: case 0x84:  *dst = 'A'; break; // ÀÁÂÃÄ
+          case 0xA7: *dst = 'c'; break; // ç
+          case 0x87: *dst = 'C'; break; // Ç
+          case 0xA8: case 0xA9: case 0xAA: case 0xAB: *dst = 'e'; break; // èéêë
+          case 0x88: case 0x89: case 0x8A: case 0x8B: *dst = 'E'; break; // ÈÉÊË
+          case 0xAC: case 0xAD: case 0xAE: case 0xAF: *dst = 'i'; break; // ìíîï
+          case 0x8C: case 0x8D: case 0x8E: case 0x8F: *dst = 'I'; break; // ÌÍÎÏ
+          case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xB6: *dst = 'o'; break; // òóôõö
+          case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: *dst = 'O'; break; // ÒÓÔÕÖ
+          case 0xB9: case 0xBA: case 0xBB: case 0xBC: *dst = 'u'; break; // ùúûü
+          case 0x99: case 0x9A: case 0x9B: case 0x9C: *dst = 'U'; break; // ÙÚÛÜ
+          case 0xB1: *dst = 'n'; break; // ñ
+          case 0x91: *dst = 'N'; break; // Ñ
+          default: *dst = '?'; break; // desconhecido
+        }
+        dst++;
+        src++; // Pula o segundo byte do caractere especial
+      } else {
+        *dst++ = *src++; // Copia byte normal
+      }
+    }
+    *dst = '\0'; // Termina a nova string
+  }
+
+  void upperFirstLetter(char* str) {
+    if (str && str[0] != '\0') {  // Checks for empty string        
+      str[0] = toupper(str[0]);  // Convert the first character to uppercase
+    }
+  }
+
+
+
 void getDateFromEpoch(time_t epoch, int &day, int &month, int &year) {
     struct tm timeinfo;
     gmtime_r(&epoch, &timeinfo);
@@ -234,12 +313,6 @@ void getTimeFromEpoch(time_t epoch, int &hour, int &minute, int &second) {
     minute = timeinfo.tm_min;
     second = timeinfo.tm_sec;
 }
-
-void upperFirstLetter(char* str) {
-    if (str && str[0] != '\0') {  // Checks for empty string        
-      str[0] = toupper(str[0]);  // Convert the first character to uppercase
-    }
-  }
 
 
 float calculateQNH(float pressure, float temperature, float altitude) {
@@ -381,7 +454,7 @@ void getWeatherJSON(bool forecast = false) {
     // to avoid memory fragmentation
     unsigned int index = 0;
     unsigned long lastRead = millis();
-    while (millis() - lastRead < 2000) { // timeout de 2 segundos
+    while (millis() - lastRead < 2000) { // 2 seconds timeout for reading network
         while (client.available()) {            
             if (index < MAX_RESPONSE_SIZE - 1) {  // Buffer limit check
                 weatherJson[index++] = (char)client.read();  // Add the next character to the buffer
@@ -390,7 +463,7 @@ void getWeatherJSON(bool forecast = false) {
                 break;  // Buffer is full, stop reading
             }
         }
-        yield(); // tenta cooperar com o Wi-Fi
+        yield(); // try to play nice with the esp8266
     }
     weatherJson[index] = '\0';  // Add null terminator to the string
     #ifdef SERIALPRINT
@@ -530,8 +603,56 @@ void getWeather() {
  
   }
 
-  #define EEPROM_ADDRESS 0x50  // Endereço da EEPROM externa (0x50)
+long lastMQTTMillis = 0;
+void sendSensorData(float tmp, float hum, float pres) {
+    if (millis() - lastMQTTMillis > 30000) {
+        lastMQTTMillis = millis();
+        // Check if connected to MQTT
+        if (!mqtt.connected()) {
+            #ifdef SERIALPRINT
+            Serial.println("Conectando ao MQTT...");
+            #endif
+            if (mqtt.connect("esp1", mqtt_user, mqtt_pass)) {
+                #ifdef SERIALPRINT
+                Serial.println("Conectado ao MQTT");
+                #endif
+            } else {
+                #ifdef SERIALPRINT
+                Serial.print("Falha ao conectar ao MQTT, rc=");
+                Serial.print(mqtt.state());
+                #endif
+                return;
+            }
+        }
 
+        // Messages variables
+        char tmp_str[8];
+        char hum_str[8];
+        char pres_str[8];
+
+
+        // Convert to string
+        dtostrf(tmp, 6, 2, tmp_str);
+        dtostrf(hum, 6, 2, hum_str);
+        dtostrf(pres, 6, 2, pres_str);
+
+        // Publish on MQTT
+        mqtt.publish("esp1/sensor/temperature", tmp_str);
+        mqtt.publish("esp1/sensor/humidity", hum_str);
+        mqtt.publish("esp1/sensor/pressure", pres_str);
+
+        #ifdef SERIALPRINT
+        Serial.println("Dados enviados ao broker:");
+        Serial.print("Temperatura: "); Serial.println(tmp_str);
+        Serial.print("Umidade: "); Serial.println(hum_str);
+        Serial.print("Pressão: "); Serial.println(pres_str);
+        #endif
+    }
+}
+
+
+
+  #define EEPROM_ADDRESS 0x50  // Endereço da EEPROM externa (0x50)
   // Função para escrever na EEPROM externa
   void writeEEPROM(uint16_t addr, byte data) {
     Wire.beginTransmission(EEPROM_ADDRESS);
@@ -628,6 +749,9 @@ void setup() {
         lcd.print("Erro ao conectar NTP");
         delay(10000);
     }
+
+    mqtt.setServer(mqtt_server, mqtt_port);
+
 
     // Makes the Weather update in 10 seconds from startup
     current_dt = rtc.now().unixtime() - FETCH_INTERVAL - 10; 
@@ -767,11 +891,10 @@ void printForecast(unsigned int index) {
   
     // Linha 3: chuva e probabilidade de chuva
     lcd.setCursor(0, 3);
-    lcd.print("Chuva:");
-    lcd.print(fc.rain_3h, 1);
-    lcd.print("mm POP:");
     lcd.print((int)(fc.pop * 100));
-    lcd.print("%");
+    lcd.print("% Chuva: ");
+    lcd.print(fc.rain_3h, 1);
+    lcd.print("mm");
   }
   
 
@@ -866,20 +989,26 @@ void loop() {
             lcd.clear();
         }
 
-        if (counter == 0) {
-            #ifdef SERIALPRINT
-            Serial.printf("Temp: %.1f C, Hum: %.1f%%, Pres: %.1fhPa, Alt: %dm NTP: %s\n", tmp, hum, pres, alt, ntpConnected ? "True" : "False");
-            #endif
-            printMainScreen(hour, minute, second, day, month, year, dayOfWeek, tmp, hum, pres, alt);
-        }
-        else if (counter == 1) {
-            printCurrentWeather();
-        }
-        else if (counter >= 2 && counter <= 9) {
-            printForecast(counter - 2);
-        }
-        else if (counter == -1) {
-            printNetworkStatus();
+        switch (counter) {
+            case 0:
+                #ifdef SERIALPRINT
+                Serial.printf("Temp: %.1f C, Hum: %.1f%%, Pres: %.1fhPa, Alt: %dm NTP: %s\n", tmp, hum, pres, alt, ntpConnected ? "True" : "False");
+                #endif
+                printMainScreen(hour, minute, second, day, month, year, dayOfWeek, tmp, hum, pres, alt);
+                break;
+            case 1:
+                printCurrentWeather();
+                break;
+            case -1:
+                printNetworkStatus();
+                break;
+            default:
+                // Forecast ranges from 2 to 9
+                // Needs to subtract 2 to translate to index 0 through 7
+                if (counter >= 2 && counter <= 9) {
+                    printForecast(counter - 2);
+                }
+                break;
         }
         
         // Update 
@@ -887,6 +1016,7 @@ void loop() {
         readBME();
         getWeather();
         getForecast();
+        sendSensorData(tmp, hum, qnh);
 
         btnPressed = false; // Reset button state
     }

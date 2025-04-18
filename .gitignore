@@ -5,4 +5,5 @@
 .vscode/ipch
 include/wifipasswd.h
 include/apikeys.h
+include/mqttconfig.h
 JSONINSTRUCTIONS.TXT
