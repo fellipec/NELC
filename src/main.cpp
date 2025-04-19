@@ -72,7 +72,7 @@ WiFiClientSecure client;
 PubSubClient mqtt(client);
 
 // Dias da semana
-const char* daysOfTheWeek[7] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"};
+const char* daysOfTheWeek[7] = {"Domingo", "Segunda", "Terca", "Quarta", "Quinta", "Sexta", "Sabado"};
 
 /* 
  * GLOBAL VARIABLES 
@@ -688,8 +688,11 @@ void setup() {
     Serial.println("");
     Serial.println("Iniciando...");
     lcd.begin(20, 4);
-    lcd.setCursor(0, 0);
     lcd.backlight();
+    lcd.setCursor(0, 0);lcd.print("+------------------+");
+    lcd.setCursor(0, 1);lcd.print("|    Iniciando     |");
+    lcd.setCursor(0, 2);lcd.print("|    Aguarde...    |");
+    lcd.setCursor(0, 3);lcd.print("+------------------+");
     bme.begin(0x76); // I2C address 0x76
     bme.setSampling(Adafruit_BME280::MODE_FORCED,
                     Adafruit_BME280::SAMPLING_X1,  // temperature
@@ -916,9 +919,11 @@ void printNetworkStatus() {
     lcd.setCursor(0, 1);
     lcd.printf("IP: %s", WiFi.localIP().toString().c_str());
     lcd.setCursor(0, 2);
-    lcd.printf("NTP: %s", ntpConnected ? "Conectado" : "Desconectado");
+    lcd.printf("NTP: %s", ntpConnected ? "OK   " : "Nao  ");
+    lcd.print(timeClient.getFormattedTime());
     lcd.setCursor(0, 3);
-    lcd.printf("RTC: %s", rtc.isrunning() ? "Ativo" : "Inativo");
+    lcd.printf("RTC: %s", rtc.isrunning() ? "OK   " : "Nao  ");
+    lcd.printf("%02d:%02d:%02d", rtc.now().hour(), rtc.now().minute(), rtc.now().second());
 }
 
 void readRE() {
