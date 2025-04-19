@@ -507,26 +507,27 @@ void getForecast() {
         JsonArray list = doc["list"];
         
         for (int i = 0; i < FORECAST_HOURS; i++) {
-          JsonObject entry = list[i];
-          JsonObject main = entry["main"];
-          JsonObject weather0 = entry["weather"][0];
-          JsonObject rain = entry["rain"];
-          
-          forecast[i].dt = entry["dt"];
-          forecast[i].dt += utcOffsetInSeconds;
-          forecast[i].temp = main["temp"];
-          forecast[i].feels_like = main["feels_like"];
-          forecast[i].temp_min = main["temp_min"];
-          forecast[i].temp_max = main["temp_max"];
-          forecast[i].pressure = main["pressure"];
-          forecast[i].humidity = main["humidity"];
-          forecast[i].pop = entry["pop"];
-          forecast[i].rain_3h = rain["3h"] | 0.0;
+            JsonObject entry = list[i];
+            JsonObject main = entry["main"];
+            JsonObject weather0 = entry["weather"][0];
+            JsonObject rain = entry["rain"];
+            
+            forecast[i].dt = entry["dt"];
+            forecast[i].dt += utcOffsetInSeconds;
+            forecast[i].temp = main["temp"];
+            forecast[i].feels_like = main["feels_like"];
+            forecast[i].temp_min = main["temp_min"];
+            forecast[i].temp_max = main["temp_max"];
+            forecast[i].pressure = main["pressure"];
+            forecast[i].humidity = main["humidity"];
+            forecast[i].pop = entry["pop"];
+            forecast[i].rain_3h = rain["3h"] | 0.0;
         
-          const char* desc = weather0["description"] | "";
-          strncpy(forecast[i].description, desc, sizeof(forecast[i].description));
-          forecast[i].description[sizeof(forecast[i].description) - 1] = '\0';
-          upperFirstLetter(forecast[i].description);
+            const char* desc = weather0["description"] | "";
+            strncpy(forecast[i].description, desc, sizeof(forecast[i].description));
+            forecast[i].description[sizeof(forecast[i].description) - 1] = '\0';
+            upperFirstLetter(forecast[i].description);
+            removeAccents(forecast[i].description);
         }
         
 
@@ -562,10 +563,12 @@ void getWeather() {
         strncpy(current_weatherDescription, desc, sizeof(current_weatherDescription)); // Copy string to avoid null pointer
         current_weatherDescription[sizeof(current_weatherDescription) - 1] = '\0'; // add null terminator
         upperFirstLetter(current_weatherDescription); // Capitalize first letter
+        removeAccents(current_weatherDescription); // Remove accents
         const char* name = doc["name"] | "";
         strncpy(location_name, name, sizeof(location_name)); // Copy string to avoid null pointer
         location_name[sizeof(location_name) - 1] = '\0'; // add null terminator
         upperFirstLetter(location_name); // Capitalize first letter
+        removeAccents(location_name); // Remove accents
 
         JsonObject main = doc["main"];
         current_temp= main["temp"]; 
