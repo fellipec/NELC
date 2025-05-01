@@ -28,6 +28,7 @@
 Adafruit_BME280 bme;
 #define SEALEVELPRESSURE_HPA (1013.25)
 #define BME_READ_INTERVAL 60000
+#define TEMPERATURE_COMPENSATION 0.0
 
 // LiquidCrystal_I2C Controller
 LiquidCrystal_I2C lcd(0x27,20,4);
@@ -180,9 +181,9 @@ bool tryWIFI() {
 
         int tentativa = 0;
         int j = 0;  // Index for gizmo array
-        // Retry connection up to 10 seconds (10 attempts)
+        // Retry connection up to 10 seconds (20 attempts * 500ms)
         while (WiFi.status() != WL_CONNECTED && tentativa < 20) {
-            delay(250);
+            delay(500);
             #ifdef SERIALPRINT            
             Serial.print(".");
             #endif
@@ -699,7 +700,7 @@ void setup() {
                     Adafruit_BME280::SAMPLING_X1,  // pressure
                     Adafruit_BME280::SAMPLING_X1,  // humidity
                     Adafruit_BME280::FILTER_OFF );
-    bme.setTemperatureCompensation(-2); 
+    bme.setTemperatureCompensation(TEMPERATURE_COMPENSATION); 
     rtc.begin();
     client.setInsecure(); // Usa a verificação de certificado SSL sem precisar armazená-lo
     Serial.println(rtc.now().timestamp());
@@ -713,12 +714,12 @@ void setup() {
 
     wifiConnected = tryWIFI();
 
-    if (wifiConnected) {        
-        ntpSrvIndex = tryNTPServer();
+    if (wifiConnected) {
         lcd.setCursor(0, 0);
         lcd.printf("Wi-Fi: %s", WiFi.SSID().c_str());
         lcd.setCursor(0, 1);
         lcd.printf("IP: %s", WiFi.localIP().toString().c_str());
+        ntpSrvIndex = tryNTPServer();
     } 
     else {
         ntpSrvIndex = -1;
@@ -794,8 +795,8 @@ void setup() {
     #endif
 
     // writeEEPROM(0, 0x41);
-    byte data = readEEPROM(0);
-    Serial.printf("EEPROM data: %c\n", data);
+    //byte data = readEEPROM(0);
+    //Serial.printf("EEPROM data: %c\n", data);
 
     #ifdef SERIALPRINT
     Serial.println("Inicialização completa - Debug Serial ligado");
